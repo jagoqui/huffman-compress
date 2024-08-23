@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Canvas Matrix with Optimized Compression</title>
+    <style>
+        canvas {
+            border: 1px solid black;
+            margin-top: 10px;
+        }
+        .char-count {
+            margin-top: 10px;
+            font-family: monospace;
+        }
+        #binaryOutput, #codeMapDisplay {
+            margin-top: 10px;
+            white-space: pre-wrap;
+            font-family: monospace;
+            background: #f0f0f0;
+            padding: 10px;
+            border: 1px solid #ccc;
+            max-width: 100%;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <textarea id="matrixInput" rows="10" cols="30" placeholder="Ingresa la matriz aquí"></textarea><br>
+    <canvas id="matrixCanvas"></canvas>
+    <div id="charCount" class="char-count">Caracteres originales: 0</div>
+    <div id="compressedCharCount" class="char-count">Caracteres comprimidos: 0</div>
+    <div id="binaryOutput" class="char-count">Datos comprimidos en binario:</div>
+    <div class="matrix-section">
+        <h3>Matriz Descomprimida:</h3>
+        <canvas id="decompressedMatrixCanvas"></canvas>
+    </div>
+    <div class="matrix-section">
+        <h3>Datos Comprimidos:</h3>
+        <textarea id="binaryInput" rows="5" cols="30" placeholder="Ingresa el dato comprimido aquí"></textarea><br>
+        <button id="decompressButton">Descomprimir y Mostrar</button>
+    </div>
+    <div class="matrix-section">
+        <h3>Mapa de Códigos Huffman:</h3>
+        <pre id="codeMapDisplay"></pre>
+    </div>
+
+    <script>
+        class HuffmanNode {
+            constructor(character, frequency, left = null, right = null) {
+                this.character = character;
+                this.frequency = frequency;
+                this.left = left;
+                this.right = right;
+            }
+        }
+
+        function buildHuffmanTree(frequencyMap) {
+            let nodes = Object.entries(frequencyMap).map(([char, freq]) => new HuffmanNode(char, freq));
+            while (nodes.length > 1) {
+                nodes.sort((a, b) => a.frequency - b.frequency);
+                let left = nodes.shift();
+                let right = nodes.shift();
+                nodes.push(new HuffmanNode(null, left.frequency + right.frequency, left, right));
+            }
+            return nodes[0];
+        }
+
+        function buildHuffmanCodeMap(node, prefix = '', codeMap = {}) {
+            if (node.character !== null) {
+                codeMap[node.character] = prefix;
+            } else {
+                buildHuffmanCodeMap(node.left, prefix + '0', codeMap);
+                buildHuffmanCodeMap(node.right, prefix + '1', codeMap);
+            }
+            return codeMap;
+        }
+
+        function encodeCodeMap(codeMap) {
+            return stringToBinary(Object.entries(codeMap).map(([char, code]) => `${char}:${code}`).join(','));
+        }
+
+        function decodeCodeMap(codeMapBinary) {
+            return Object.fromEntries(
+                binaryToString(codeMapBinary).split(',').map(entry => {
+                    let [char, code] = entry.split(':');
+                    return [char, code];
+                })
+            );
+        }
+
+        function stringToBinary(str) {
+            return Array.from(str).map(char => char.charCodeAt(0).toString(2).padStart(8, '0')).join('');
+        }
+
+        function binaryToString(bin) {
+            return bin.match(/.{1,8}/g).map(byte => String.fromCharCode(parseInt(byte, 2))).join('');
+        }
+
+        function huffmanCompress(text) {
+            if (!text) return '';
+
+            let frequencyMap = {};
+            text.split('').forEach(char => frequencyMap[char] = (frequencyMap[char] || 0) + 1);
+
+            let tree = buildHuffmanTree(frequencyMap);
+            let codeMap = buildHuffmanCodeMap(tree);
+
+            let compressed = text.split('').map(char => codeMap[char]).join('');
+            let codeMapBinary = encodeCodeMap(codeMap);
+
+            return codeMapBinary + '00000000' + compressed;
+        }
+
+        function huffmanDecompress(data) {
+            if (!data) return '';
+
+            let [codeMapBinary, compressedText] = data.split('00000000');
+            let codeMap = decodeCodeMap(codeMapBinary);
+            let reverseMap = Object.fromEntries(Object.entries(codeMap).map(([char, code]) => [code, char]));
+
+            let buffer = '', result = '';
+            for (let bit of compressedText) {
+                buffer += bit;
+                if (reverseMap[buffer]) {
+                    result += reverseMap[buffer];
+                    buffer = '';
+                }
+            }
+            return result;
+        }
+
+        function drawCanvas(data, canvasId) {
+            const lines = data.trim().split('\n').map(line => line.trim().toUpperCase()).filter(line => line.length > 0);
+            if (lines.length === 0) return;
+
+            const rows = lines.length;
+            const maxCols = Math.max(...lines.map(line => line.length));
+            const cellSize = 20;
+            const canvas = document.getElementById(canvasId);
+            const ctx = canvas.getContext('2d');
+            canvas.width = maxCols * cellSize;
+            canvas.height = rows * cellSize;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            lines.forEach((line, y) => {
+                if (/^[01]+$/.test(line)) {
+                    for (let x = 0; x < line.length; x++) {
+                        ctx.fillStyle = line[x] === '1' ? 'black' : 'white';
+                        ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+                    }
+                } else {
+                    ctx.font = '16px monospace';
+                    ctx.fillStyle = 'black';
+                    ctx.textBaseline = 'top';
+                    ctx.fillText(line, 0, y * cellSize);
+                }
+            });
+        }
+
+        function updateDisplay() {
+            const originalText = document.getElementById('matrixInput').value.trim();
+            if (!originalText) {
+                ['charCount', 'compressedCharCount', 'binaryOutput', 'codeMapDisplay'].forEach(id => document.getElementById(id).textContent = '');
+                drawCanvas('', 'matrixCanvas');
+                drawCanvas('', 'decompressedMatrixCanvas');
+                return;
+            }
+
+            const compressedData = huffmanCompress(originalText);
+            const decompressedText = huffmanDecompress(compressedData);
+
+            document.getElementById('charCount').textContent = `Caracteres originales: ${originalText.length}`;
+            document.getElementById('compressedCharCount').textContent = `Caracteres comprimidos: ${compressedData.length}`;
+            document.getElementById('binaryOutput').textContent = `Datos comprimidos en binario:\n${compressedData}`;
+
+            const codeMapBinary = compressedData.split('00000000')[0];
+            document.getElementById('codeMapDisplay').textContent = JSON.stringify(decodeCodeMap(codeMapBinary), null, 2);
+
+            drawCanvas(originalText, 'matrixCanvas');
+            drawCanvas(decompressedText, 'decompressedMatrixCanvas');
+        }
+
+        document.getElementById('matrixInput').addEventListener('input', updateDisplay);
+        document.getElementById('decompressButton').addEventListener('click', () => {
+            const binaryInput = document.getElementById('binaryInput').value;
+            drawCanvas(huffmanDecompress(binaryInput), 'decompressedMatrixCanvas');
+        });
+
+        updateDisplay();
+    </script>
+</body>
+</html>
